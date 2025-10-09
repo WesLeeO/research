@@ -318,10 +318,6 @@ if __name__ == "__main__":
     gpt2MC.to(device)
     gpt2MC.train()
 
-
-
-
-
     for epoch in tqdm.tqdm(range(run.config["epochs"]), desc="Epochs"):
         optimizer.zero_grad()
         for step, batch in enumerate(dataloader):

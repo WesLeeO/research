@@ -102,15 +102,8 @@ def generate_trajectories(trained_model, trained_tokenizer, oracle_model, oracle
     device = "cuda" if torch.cuda.is_available() else "cpu"
     trained_model.to(device)
     oracle_model.to(device)
-     # Test with a very basic completion
-   # test_prompt = "The weather is"
-   # test_context = trained_tokenizer(test_prompt, return_tensors="pt").to(device)
-   # test_output = trained_model.generate(
-   #     **test_context, 
-   #     max_new_tokens=10,
-   #     pad_token_id=trained_tokenizer.eos_token_id
-   # )
-   # print("Test completion:", trained_tokenizer.decode(test_output[0]))
+    trained_model.eval()
+    oracle_model.eval()
 
     #load trained model
     trajectories = []
@@ -121,15 +114,6 @@ def generate_trajectories(trained_model, trained_tokenizer, oracle_model, oracle
         questions = 0
         while questions < max_steps: #trained_model did not generate final guess:
             prompt = context_str + "Q:"
-            """
-            if questions == 0:
-                prompt = initial_prompt
-            else:
-                if questions == max_steps - 1:
-                    prompt = context_str + "Make a final guess about the city."
-                else: 
-                    prompt = context_str + "Ask the next question about the city. When you are confident you know its name, make a final guess."
-            """
             context = trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
             input_ids = context['input_ids']
             question_ids = trained_model.generate(**context, do_sample=True, top_p=0.9, temperature=0.7, max_new_tokens=30, pad_token_id=trained_tokenizer.eos_token_id)
@@ -234,10 +218,23 @@ if __name__ == "__main__":
     oracle_tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
     
 
-    trajectories = generate_trajectories(model, tokenizer, oracle_model, oracle_tokenizer, cities, num_trajectories=1)
+    trajectories = generate_trajectories(model, tokenizer, oracle_model, oracle_tokenizer, cities, num_trajectories=100)
+    rewards = reward_trajectories(trajectories)
+    avg_reward = np.mean(rewards)
+    std_reward = np.std(rewards)
+    accuracy = np.sum([t['target_city'].lower() in t['questions'][-1].lower() for t in trajectories]) / len(trajectories)
 
-    with open('bc/generated_trajectories2.json', 'w') as f:
-        json.dump(trajectories, f)
+    print(f"Average reward: {avg_reward}")
+    print(f"Std reward: {std_reward}")
+    print(f"Accuracy: {accuracy}")
+
+    with open(f"mc/summary_bc.out", "w") as f:
+        f.write(f"Average reward: {avg_reward}\n")
+        f.write(f"Std reward: {std_reward}\n")
+        f.write(f"Accuracy: {accuracy}\n")
+
+    with open(f"mc/trajectories_bc.out", "w") as f:
+        json.dump(trajectories, f, indent=2)
 
     """
     #oracle_model_name = "/cluster/scratch/wnanadavies/GuessMyCity/gpt2-medium-offline" 
