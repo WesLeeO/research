@@ -8,23 +8,23 @@ class MCDataset(Dataset):
         self.data = []
         count = 0
         for convo in conversations:
-            if max_conversations and count >= max_conversations:
-                break
-
-            texts = []
-            for line in convo["lines"]:
-                q, a = line.split("?", 1)
-                texts.extend([Text("Q:" + q.strip() + "?", True), Text("A:" + a.strip(), False)])
-            text_history: TextHistory = tuple(texts)
-            reward = [0.0 if (not text.is_action or (convo['correct'] and i == len(convo["lines"]) - 1)) else -1.0 
-                      for i, text in enumerate(texts)]
-            done = True if convo['correct'] else convo['lines'][-1].startswith("Is the city")
-            text_trajectory = TextTrajectory(text_history, tuple(reward), done)
-            text_trajectory_chain = TextTrajectoryChain(text_trajectory, None)
-            token_trajectory_chain = TokenTrajectoryChain.from_text_trajectory_chain(text_trajectory_chain, tokenizer)
-            mc_data = self.truncate_mc_data(MCData.from_token_trajectory_chain(token_trajectory_chain, gamma=gamma), tokenizer.model_max_length, tokenizer.pad_token_id)
-            self.data.append(mc_data)
-            count += 1
+            if convo['correct']:
+                if max_conversations and count >= max_conversations:
+                    break
+                texts = []
+                for line in convo["lines"]:
+                    q, a = line.split("?", 1)
+                    texts.extend([Text("Q:" + q.strip() + "?", True), Text("A:" + a.strip(), False)])
+                text_history: TextHistory = tuple(texts)
+                reward = [0.0 if (not text.is_action or (convo['correct'] and i == len(convo["lines"]) - 1)) else -1.0 
+                        for i, text in enumerate(texts)]
+                done = True if convo['correct'] else convo['lines'][-1].startswith("Is the city")
+                text_trajectory = TextTrajectory(text_history, tuple(reward), done)
+                text_trajectory_chain = TextTrajectoryChain(text_trajectory, None)
+                token_trajectory_chain = TokenTrajectoryChain.from_text_trajectory_chain(text_trajectory_chain, tokenizer)
+                mc_data = self.truncate_mc_data(MCData.from_token_trajectory_chain(token_trajectory_chain, gamma=gamma), tokenizer.model_max_length, tokenizer.pad_token_id)
+                self.data.append(mc_data)
+                count += 1
 
     def truncate_mc_data(self, mc_data: MCData, max_len: int, pad_token_id: int) -> dict:
         input_ids = mc_data.input_ids

@@ -162,7 +162,7 @@ def generate_trajectories(gpt2MC, num_trajectories):
                 bias = gpt2MC.q_function(last_hidden)                 # (batch, vocab)
                 scores = outputs.logits[:, -1, :]                     # (batch, vocab)
                 probs = F.softmax(scores, dim=-1)
-                alpha = -1.0 ##???
+                alpha = -0.1 ##??? tested -1 -0.1 should be more smooth/ penalize less small rtg tokens
                 probs = probs ** (alpha * bias)
                 probs = F.softmax(scores, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
@@ -191,13 +191,17 @@ def generate_trajectories(gpt2MC, num_trajectories):
                 do_sample=False,
                 max_new_tokens=100,
                 pad_token_id=oracle_tokenizer.eos_token_id,
-                eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question")
+                eos_token_id=oracle_tokenizer.eos_token_id 
             )
             ans_ids = answer_ids[:, oracle_context["input_ids"].shape[1]:]
             answer = oracle_tokenizer.decode(ans_ids[0], skip_special_tokens=True).strip()
-            stop_idx = answer.find("Question")
-            if stop_idx != -1:
-                answer = answer[:stop_idx].strip()
+            stop_cues = ["Question", "Answer"]
+            # truncate at the first cue that appears
+            for cue in stop_cues:
+                stop_idx = answer.find(cue)
+                if stop_idx != -1:
+                    answer = answer[:stop_idx].strip()
+                    break
             print(f"A{questions + 1}: {answer}")
             previous_qa.append([question, answer])
             context_str += f"Q:{question} A:{answer}\n"
@@ -280,12 +284,12 @@ def run_evaluation(gpt2MC, step):
     print(f"Std reward: {std_reward}")
     print(f"Accuracy: {accuracy}")
 
-    with open(f"mc/summary_mc_{step}.out", "w") as f:
+    with open(f"mc/summary_mc_filtered_{step}.out", "w") as f:
         f.write(f"Average reward: {avg_reward}\n")
         f.write(f"Std reward: {std_reward}\n")
         f.write(f"Accuracy: {accuracy}\n")
 
-    with open(f"mc/trajectories_mc_{step}.out", "w") as f:
+    with open(f"mc/trajectories_mc_filtered_{step}.out", "w") as f:
         json.dump(trajectories, f, indent=2)
     
 
@@ -294,11 +298,12 @@ if __name__ == "__main__":
     
     with open('train.json', 'r') as f:
         conversations = json.load(f)
+
     count = 0
-    max_conversations = 20_000
+    max_conversations = 40_000
 
     base_model_path = "./gpt2-medium-offline"
-    sft_model_path = "bc/fine_tuned_gpt2_medium_lora"
+    sft_model_path = "bc/fine_tuned_gpt2_medium_lora_filtered"
 
     base_model = AutoModelForCausalLM.from_pretrained(base_model_path, local_files_only=True)
     tokenizer = AutoTokenizer.from_pretrained(sft_model_path)
@@ -311,12 +316,12 @@ if __name__ == "__main__":
 
     run = wandb.init(
         project="research-multi-turn-RL-with-LMs",
-        name="gpt2-medium-mc-lora",
+        name="gpt2-medium-mc-lora-filtered",
         config={
             "learning_rate": 1e-4,       # smaller LR for stability
             "batch_size": 4,
             "max_length": tokenizer.model_max_length,
-            "epochs": 2,
+            "epochs": 1,
             "optimizer": "AdamW",
             "accum_steps": 8,            # gradient accumulation
         },
@@ -365,10 +370,10 @@ if __name__ == "__main__":
 
             #20_000 / 4 = 5_000 batches
             # Every 1250 batches run evaluation (should be 2 (epochs) x 4 (ev/epoch) = 8)
-            if (step + 1) % (len(dataloader) / 4) == 0:
+            if (step + 1) % (len(dataloader) // 4) == 0:
                 run_evaluation(gpt2MC, step+1)
 
-    torch.save(gpt2MC.q_function.state_dict(), "mc/q_function.pth")
+    torch.save(gpt2MC.q_function.state_dict(), "mc/q_function_f.pth")
 
             
          
