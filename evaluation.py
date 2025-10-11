@@ -139,7 +139,7 @@ def generate_trajectories(trained_model, trained_tokenizer, oracle_model, oracle
             print(f"Q{questions + 1}: {question}")
             context = oracle_tokenizer(generate_oracle_prompt(target_city, question), return_tensors="pt").to(device)
             #answer_ids = oracle_model.generate(**context, do_sample=True, top_p=0.9, temperature=0.7, repetition_penalty=1.2, min_length=20, max_new_tokens=100, pad_token_id=oracle_tokenizer.eos_token_id)
-            answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=50, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
+            answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=100, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
             input_ids = context['input_ids']
             answer_ids = answer_ids[:, input_ids.shape[1]:]  
             answer = oracle_tokenizer.decode(answer_ids[0], skip_special_tokens=True).strip()

@@ -12,6 +12,7 @@ import wandb
 from peft import LoraConfig, get_peft_model
 from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
+import random
 
 cities = ['guayaquil,ecuador', 'taipei,china', 'zibo,china', 'jinan,china', 'alexandria,egypt', 
 'berlin,germany', 'sydney,australia', 'istanbul,turkey', 'osaka,japan', 'hong kong,china', 'bogota,colombia', 'jakarta,indonesia', 
@@ -269,6 +270,21 @@ def train_model(pairs):
     tokenizer.save_pretrained("./fine_tuned_gpt2_medium")
     """
 
+def is_city_guess(question: str) -> bool:
+    q = question.strip()
+    prefix = "Is the city you are from"
+    if not q.lower().startswith(prefix.lower()):
+        return False
+
+    # Find the character immediately after the prefix
+    rest = q[len(prefix):].lstrip()
+    if not rest:
+        return False  # no text after prefix
+
+    first_char = rest[0]
+    # City guesses usually start with a capital letter, not lowercase
+    return first_char.isupper()
+
 
 @torch.no_grad()
 def generate_trajectories(model, tokenizer, num_trajectories):
@@ -302,7 +318,7 @@ def generate_trajectories(model, tokenizer, num_trajectories):
             question = question.strip()
             print(f"Q{questions + 1}: {question}")
             context = oracle_tokenizer(generate_oracle_prompt(target_city, question), return_tensors="pt").to(device)
-            answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=50, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
+            answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=100, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
             input_ids = context['input_ids']
             answer_ids = answer_ids[:, input_ids.shape[1]:]  
             answer = oracle_tokenizer.decode(answer_ids[0], skip_special_tokens=True).strip()
@@ -376,7 +392,7 @@ def train_model2(conversations):
         project="research-multi-turn-RL-with-LMs",
         name="gpt2-medium-lora-bc-filtered",
         config={
-            "learning_rate": 1e-5,       
+            "learning_rate": 1e-4,       
             "batch_size": 4,
             "max_length": tokenizer.model_max_length,
             "epochs": 1,
@@ -442,7 +458,7 @@ def train_model2(conversations):
                     "step": step + epoch * len(dataloader)
                 })
 
-            if (step + 1) % (len(dataloader) / 4) == 0:
+            if (step + 1) % (len(dataloader) // 4) == 0:
                 run_evaluation(model, tokenizer, step+1)
 
     run.finish()

@@ -118,7 +118,7 @@ def is_city_guess(question: str) -> bool:
     first_char = rest[0]
     # City guesses usually start with a capital letter, not lowercase
     return first_char.isupper()
-    
+
 @torch.no_grad()
 def generate_trajectories(gpt2MC, num_trajectories):
     trained_model = gpt2MC.model.eval()
@@ -189,7 +189,7 @@ def generate_trajectories(gpt2MC, num_trajectories):
             answer_ids = oracle_model.generate(
                 **oracle_context,
                 do_sample=False,
-                max_new_tokens=50,
+                max_new_tokens=100,
                 pad_token_id=oracle_tokenizer.eos_token_id,
                 eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question")
             )
