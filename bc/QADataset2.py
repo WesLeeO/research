@@ -3,25 +3,24 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 
 class QADataset2(Dataset):
-    def __init__(self, conversations, tokenizer, max_conversations=20_000):
+    def __init__(self, conversations, tokenizer):
         self.data = []
-        count = 0
+        self.count = 0
         for convo in conversations:
-            if max_conversations and count >= max_conversations:
-                break
-
-            texts = []
-            for line in convo["lines"]:
-                q, a = line.split("?", 1)
-                texts.extend([Text("Q:" + q.strip() + "?", True), Text("A:" + a.strip(), False)])
-            text_history: TextHistory = tuple(texts)
-            reward = [0.0 if (not text.is_action or (convo['correct'] and i == len(convo["lines"]) - 1)) else -1.0 
-                      for i, text in enumerate(texts)]
-            done = True if convo['correct'] else convo['lines'][-1].startswith("Is the city")
-            text_trajectory = TextTrajectory(text_history, tuple(reward), done)
-            token_trajectory = TokenTrajectory.from_text_trajectory(text_trajectory, tokenizer)
-            sample = self.truncate(token_trajectory, tokenizer.model_max_length, tokenizer.pad_token_id)
-            self.data.append(sample)
+            if convo['correct']: #BC-filtered
+                texts = []
+                for line in convo["lines"]:
+                    q, a = line.split("?", 1)
+                    texts.extend([Text("Q:" + q.strip() + "?", True), Text("A:" + a.strip(), False)])
+                text_history: TextHistory = tuple(texts)
+                reward = [0.0 if (not text.is_action or (convo['correct'] and i == len(convo["lines"]) - 1)) else -1.0 
+                        for i, text in enumerate(texts)]
+                done = True if convo['correct'] else convo['lines'][-1].startswith("Is the city")
+                text_trajectory = TextTrajectory(text_history, tuple(reward), done)
+                token_trajectory = TokenTrajectory.from_text_trajectory(text_trajectory, tokenizer)
+                sample = self.truncate(token_trajectory, tokenizer.model_max_length, tokenizer.pad_token_id)
+                self.data.append(sample)
+                self.count += 1
 
     
     def truncate(self, token_trajectory: TokenTrajectory, max_len: int, pad_token_id: int) -> dict:

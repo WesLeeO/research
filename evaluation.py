@@ -95,6 +95,21 @@ def generate_final_prompt(summary):
         "Complete the following question: Is the city"
     )
     return prompt
+    
+def is_city_guess(question: str) -> bool:
+    q = question.strip()
+    prefix = "Is the city you are from"
+    if not q.lower().startswith(prefix.lower()):
+        return False
+
+    # Find the character immediately after the prefix
+    rest = q[len(prefix):].lstrip()
+    if not rest:
+        return False  # no text after prefix
+
+    first_char = rest[0]
+    # City guesses usually start with a capital letter, not lowercase
+    return first_char.isupper()
 
 def generate_trajectories(trained_model, trained_tokenizer, oracle_model, oracle_tokenizer,
                           cities, num_trajectories=1000, max_steps=20):
@@ -135,7 +150,7 @@ def generate_trajectories(trained_model, trained_tokenizer, oracle_model, oracle
             previous_qa.append([question, answer])
             context_str += f"Q:{question} A:{answer}\n"
             questions += 1
-            if question.startswith("Is the city you are from") or target_city.split(",")[0].lower() in question.lower():
+            if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
                 break
         trajectories.append({"questions": [l[0] for l in previous_qa], "target_city": target_city.split(",")[0]})
     return trajectories

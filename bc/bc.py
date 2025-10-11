@@ -13,62 +13,32 @@ from peft import LoraConfig, get_peft_model
 from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 
-"""
-initial_prompt = (
-    "You can ask up to 20 questions (the less the better) to determine the city chosen by an oracle."
-    "Be smart and try to narrow down the possible cities as much as possible."
-    "Generate the first question you will ask to determine the city. "
-)
+cities = ['guayaquil,ecuador', 'taipei,china', 'zibo,china', 'jinan,china', 'alexandria,egypt', 
+'berlin,germany', 'sydney,australia', 'istanbul,turkey', 'osaka,japan', 'hong kong,china', 'bogota,colombia', 'jakarta,indonesia', 
+'bogor,indonesia', 'bandung,indonesia', 'calcutta,india', 'tashkent,uzbekistan', 
+'chengdu,china', 'giza,egypt', 'semarang,indonesia', 'lima,peru', 'hyderabad,india', 
+'havanna,cuba', 'haerbin,china', 'izmir,turkey', 'brasilia,brazil', 'shenyang,china', 'delhi,india', 
+'baghdad,iraq', 'rio de janeiro,brazil', 'london,uk', 'rome,italy', 'los angeles,usa', 
+'mexico city,mexico', 'bucuresti,romania', 'ho chi minh city,vietnam', 'taega,south korea', 
+'toronto,canada', 'surabaya,indonesia', 'bangalore,india', 'fortaleza,brazil', 'yokohama,japan', 
+'salvador,brazil', 'st petersburg,russia', 'beijing,china', 'wuhan,china', 'karachi,pakistan', 
+'cirebon,indonesia', 'dhaka,bangladesh', 'chicago,usa', 'bombay,india', 'guangzhou,china', 
+'santiago,chile', 'budapest,hungary', 'tehran,iran', 'houston,usa', 'casablanca,morocco', 'kinshaha,congo', 
+'malang,indonesia', 'qingdao,china', 'xian,china', 'caracas,venezuela', 'abidjan,cote d’ivorie', 
+'medellin,colombia', 'tokyo,japan', 'madras,india', 'kanpur,india', 'bangkok,thailand', 'addis ababa,ethopia', 
+'pusan,south korea', 'dalian,china', 'tianjin,china', 'mashhad,iran', 'yangon,myanmar', 
+'sukabumi,indonesia', 'moscow,russia', 'inchon,south korea', 'buenos aires,argentina', 'cali,colombia', 'new york,usa', 
+'lahore,pakistan', 'ahmedabad,india', 'chongqing,china', 'changchun,china', 'nanjing,china', 'madrid,spain', 'taiyuan,china', 
+'shanghai,china', 'cairo,egypt', 'medan,indonesia', 'belo horizonte,brazil', 'paris,france', 'nagoya,japan', 
+'sao paulo,brazil', 'singapore,singapore', 'kiev,ukraine', 'pyong yang,north korea', 'faisalabad,pakistan', 'ankara,turkey', 'quezon city,philippines']
 
-def batch_summarize(histories, model, tokenizer, batch_size=8, max_new_tokens=600):
-    summaries = []
-    for i in range(0, len(histories), batch_size):
-        batch = histories[i:i+batch_size]
-        prompts = [
-         (
-          "Instructions: \nYou are summarizing answers from an oracle about a secret city. "
-          "Extract and summarize ONLY the information provided in the data below. "
-          "DO NOT add any external knowledge, inferences, or creative details. \n "
-          "- Ignore irrelevant, repeated, or uninformative text\n"
-          "- Focus on location, climate, landmarks, culture, cuisine, events, or unique characteristics\n"
-          "- Do not invent or extrapolate any information not explicitly stated\n" 
-          "Present the information as concisely as possible (not more than 400 words).\n\n"
-          "Answers:\n" + "\n".join([a for _, a in h])          
-         )
-          for h in batch
-        ]
-
-        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to("cuda")
-        outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=tokenizer.eos_token_id) # return_dict_in_generate=True, output_scores=True)
-
-        # Extract only the new tokens
-        batch_summaries = [
-          tokenizer.decode(out, skip_special_tokens=True) for out in outputs
-          #for out in outputs.sequences[:, inputs.input_ids.shape[1]:]
-        ]
-
-        summaries.extend(batch_summaries)
-    return summaries
-
-def generate_intermediate_prompt(conversation_length, summary):
-    prompt = (
-        f"Ask the next best question to narrow down the possible city you should guess. "
-        f"You have asked {conversation_length}/20 questions.\n"
-        f"Facts known so far: {summary}\n"
-        "Next question:"
-    )
+def generate_oracle_prompt(city, question):
+    prompt = f""" Answer the following question about {city}.
+    Do not reveal the name of {city} in your answer.
+    Do not generate more than 50 words.
+    Q:{question}
+    A:"""
     return prompt
-
-def generate_final_prompt(summary):
-    prompt = (
-        "Make your final guess of the secret city. "
-        "You have already asked 19/20 questions.\n"
-        f"Facts known so far: {summary}\n"
-        "Complete the following question: Is the city"
-    )
-    return prompt
-
-""" 
 
 def transform_dataset(max_questions=20, batch_size=8, num_conversations=3000):
     
@@ -300,6 +270,86 @@ def train_model(pairs):
     """
 
 
+@torch.no_grad()
+def generate_trajectories(model, tokenizer, num_trajectories):
+    trained_model = model.eval()
+    trained_tokenizer = tokenizer
+    oracle_model = AutoModelForCausalLM.from_pretrained("microsoft/Phi-3-mini-4k-instruct").eval()
+    oracle_tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    trained_model.to(device)
+    oracle_model.to(device)
+
+    trajectories = []
+    max_steps = 20
+
+    trajectories = []
+
+    for _ in range(num_trajectories):
+        target_city = random.choice(cities)
+        previous_qa = [] 
+        context_str = ""
+        questions = 0
+        while questions < max_steps: #trained_model did not generate final guess:
+            prompt = context_str + "Q:"
+            context = trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
+            input_ids = context['input_ids']
+            question_ids = trained_model.generate(**context, do_sample=True, top_p=0.9, temperature=0.7, max_new_tokens=30, pad_token_id=trained_tokenizer.eos_token_id)
+            question_ids = question_ids[:, input_ids.shape[1]:]  # Remove prompt tokens
+            question = trained_tokenizer.decode(question_ids[0], skip_special_tokens=True)
+            question = question.split("?")[0] + "?"
+            question = question.strip()
+            print(f"Q{questions + 1}: {question}")
+            context = oracle_tokenizer(generate_oracle_prompt(target_city, question), return_tensors="pt").to(device)
+            answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=50, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
+            input_ids = context['input_ids']
+            answer_ids = answer_ids[:, input_ids.shape[1]:]  
+            answer = oracle_tokenizer.decode(answer_ids[0], skip_special_tokens=True).strip()
+            stop_idx = answer.find("Question")
+            if stop_idx != -1:
+                answer = answer[:stop_idx].strip()
+            print(f"A{questions + 1}: {answer}")
+            previous_qa.append([question, answer])
+            context_str += f"Q:{question} A:{answer}\n"
+            questions += 1
+            if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
+                break
+        trajectories.append({"questions": [l[0] for l in previous_qa], "target_city": target_city.split(",")[0]})
+    return trajectories
+
+
+def reward_trajectories(trajectories):
+    rewards = []
+    for trajectory in trajectories:
+        reward = -len(trajectory["questions"])
+        final_question = trajectory["questions"][-1]
+        if trajectory["target_city"].lower() in final_question.lower():
+            reward += 1
+        rewards.append(reward)
+    return rewards
+
+def run_evaluation(model, tokenizer, step):
+    trajectories = generate_trajectories(model, tokenizer, 20)
+    rewards = reward_trajectories(trajectories)
+    avg_reward = np.mean(rewards)
+    std_reward = np.std(rewards)
+    accuracy = np.sum([t['target_city'].lower() in t['questions'][-1].lower() for t in trajectories]) / len(trajectories)
+    print(f"Average reward: {avg_reward}")
+    print(f"Std reward: {std_reward}")
+    print(f"Accuracy: {accuracy}")
+
+    with open(f"bc/summary_bc_{step}.out", "w") as f:
+        f.write(f"Average reward: {avg_reward}\n")
+        f.write(f"Std reward: {std_reward}\n")
+        f.write(f"Accuracy: {accuracy}\n")
+
+    with open(f"bc/trajectories_bc_{step}.out", "w") as f:
+        json.dump(trajectories, f, indent=2)
+    
+
+
+
 def train_model2(conversations):
     #openai-community/gpt2-xl
 
@@ -310,7 +360,6 @@ def train_model2(conversations):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.eos_token_id
-
 
     lora_config = LoraConfig(
         r=8,               
@@ -325,12 +374,12 @@ def train_model2(conversations):
 
     run = wandb.init(
         project="research-multi-turn-RL-with-LMs",
-        name="gpt2-medium-lora",
+        name="gpt2-medium-lora-bc-filtered",
         config={
-            "learning_rate": 1e-4,       
+            "learning_rate": 1e-5,       
             "batch_size": 4,
             "max_length": tokenizer.model_max_length,
-            "epochs": 2,
+            "epochs": 1,
             "optimizer": "AdamW",
             "accum_steps": 8,        
         },
@@ -393,10 +442,13 @@ def train_model2(conversations):
                     "step": step + epoch * len(dataloader)
                 })
 
+            if (step + 1) % (len(dataloader) / 4) == 0:
+                run_evaluation(model, tokenizer, step+1)
+
     run.finish()
 
-    model.save_pretrained("bc/fine_tuned_gpt2_medium_lora")
-    tokenizer.save_pretrained("bc/fine_tuned_gpt2_medium_lora")
+    model.save_pretrained("bc/fine_tuned_gpt2_medium_lora_filtered")
+    tokenizer.save_pretrained("bc/fine_tuned_gpt2_medium_lora_filtered")
 
     
 if __name__ == "__main__":

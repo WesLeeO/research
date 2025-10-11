@@ -104,6 +104,21 @@ def mc_loss(q_values, q_logits, token_ids, attention_mask, should_take_action, r
 
     return total_loss, dict(q_loss=q_loss.item(), q_cql_loss=q_cql_loss.item())
 
+def is_city_guess(question: str) -> bool:
+    q = question.strip()
+    prefix = "Is the city you are from"
+    if not q.lower().startswith(prefix.lower()):
+        return False
+
+    # Find the character immediately after the prefix
+    rest = q[len(prefix):].lstrip()
+    if not rest:
+        return False  # no text after prefix
+
+    first_char = rest[0]
+    # City guesses usually start with a capital letter, not lowercase
+    return first_char.isupper()
+    
 @torch.no_grad()
 def generate_trajectories(gpt2MC, num_trajectories):
     trained_model = gpt2MC.model.eval()
@@ -188,7 +203,7 @@ def generate_trajectories(gpt2MC, num_trajectories):
             context_str += f"Q:{question} A:{answer}\n"
             questions += 1
 
-            if question.startswith("Is the city you are from") or target_city.split(",")[0].lower() in question.lower():
+            if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
                 break
 
         trajectories.append({
