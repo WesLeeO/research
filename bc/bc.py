@@ -5,7 +5,6 @@ from torch.optim import AdamW
 import torch
 import numpy as np
 from QADataset import QADataset
-from QADataset2 import QADataset2
 from environment import *
 import tqdm
 import wandb
@@ -14,24 +13,29 @@ from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 import random
 
-cities = ['guayaquil,ecuador', 'taipei,china', 'zibo,china', 'jinan,china', 'alexandria,egypt', 
-'berlin,germany', 'sydney,australia', 'istanbul,turkey', 'osaka,japan', 'hong kong,china', 'bogota,colombia', 'jakarta,indonesia', 
-'bogor,indonesia', 'bandung,indonesia', 'calcutta,india', 'tashkent,uzbekistan', 
-'chengdu,china', 'giza,egypt', 'semarang,indonesia', 'lima,peru', 'hyderabad,india', 
-'havanna,cuba', 'haerbin,china', 'izmir,turkey', 'brasilia,brazil', 'shenyang,china', 'delhi,india', 
-'baghdad,iraq', 'rio de janeiro,brazil', 'london,uk', 'rome,italy', 'los angeles,usa', 
-'mexico city,mexico', 'bucuresti,romania', 'ho chi minh city,vietnam', 'taega,south korea', 
-'toronto,canada', 'surabaya,indonesia', 'bangalore,india', 'fortaleza,brazil', 'yokohama,japan', 
-'salvador,brazil', 'st petersburg,russia', 'beijing,china', 'wuhan,china', 'karachi,pakistan', 
-'cirebon,indonesia', 'dhaka,bangladesh', 'chicago,usa', 'bombay,india', 'guangzhou,china', 
-'santiago,chile', 'budapest,hungary', 'tehran,iran', 'houston,usa', 'casablanca,morocco', 'kinshaha,congo', 
-'malang,indonesia', 'qingdao,china', 'xian,china', 'caracas,venezuela', 'abidjan,cote d’ivorie', 
-'medellin,colombia', 'tokyo,japan', 'madras,india', 'kanpur,india', 'bangkok,thailand', 'addis ababa,ethopia', 
-'pusan,south korea', 'dalian,china', 'tianjin,china', 'mashhad,iran', 'yangon,myanmar', 
-'sukabumi,indonesia', 'moscow,russia', 'inchon,south korea', 'buenos aires,argentina', 'cali,colombia', 'new york,usa', 
-'lahore,pakistan', 'ahmedabad,india', 'chongqing,china', 'changchun,china', 'nanjing,china', 'madrid,spain', 'taiyuan,china', 
-'shanghai,china', 'cairo,egypt', 'medan,indonesia', 'belo horizonte,brazil', 'paris,france', 'nagoya,japan', 
-'sao paulo,brazil', 'singapore,singapore', 'kiev,ukraine', 'pyong yang,north korea', 'faisalabad,pakistan', 'ankara,turkey', 'quezon city,philippines']
+cities = [
+    'Guayaquil, Ecuador', 'Taipei, China', 'Zibo, China', 'Jinan, China', 'Alexandria, Egypt',
+    'Berlin, Germany', 'Sydney, Australia', 'Istanbul, Turkey', 'Osaka, Japan', 'Hong Kong, China',
+    'Bogota, Colombia', 'Jakarta, Indonesia', 'Bogor, Indonesia', 'Bandung, Indonesia', 'Kolkata, India',
+    'Tashkent, Uzbekistan', 'Chengdu, China', 'Giza, Egypt', 'Semarang, Indonesia', 'Lima, Peru',
+    'Hyderabad, India', 'Havana, Cuba', 'Harbin, China', 'Izmir, Turkey', 'Brasilia, Brazil',
+    'Shenyang, China', 'Delhi, India', 'Baghdad, Iraq', 'Rio de Janeiro, Brazil', 'London, UK',
+    'Rome, Italy', 'Los Angeles, USA', 'Mexico City, Mexico', 'Bucharest, Romania', 'Ho Chi Minh City, Vietnam',
+    'Daegu, South Korea', 'Toronto, Canada', 'Surabaya, Indonesia', 'Bangalore, India', 'Fortaleza, Brazil',
+    'Yokohama, Japan', 'Salvador, Brazil', 'St. Petersburg, Russia', 'Beijing, China', 'Wuhan, China',
+    'Karachi, Pakistan', 'Cirebon, Indonesia', 'Dhaka, Bangladesh', 'Chicago, USA', 'Mumbai, India',
+    'Guangzhou, China', 'Santiago, Chile', 'Budapest, Hungary', 'Tehran, Iran', 'Houston, USA',
+    'Casablanca, Morocco', 'Kinshasa, Congo', 'Malang, Indonesia', 'Qingdao, China', 'Xi’an, China',
+    'Caracas, Venezuela', 'Abidjan, Côte d’Ivoire', 'Medellin, Colombia', 'Tokyo, Japan', 'Chennai, India',
+    'Kanpur, India', 'Bangkok, Thailand', 'Addis Ababa, Ethiopia', 'Busan, South Korea', 'Dalian, China',
+    'Tianjin, China', 'Mashhad, Iran', 'Yangon, Myanmar', 'Sukabumi, Indonesia', 'Moscow, Russia',
+    'Incheon, South Korea', 'Buenos Aires, Argentina', 'Cali, Colombia', 'New York, USA', 'Lahore, Pakistan',
+    'Ahmedabad, India', 'Chongqing, China', 'Changchun, China', 'Nanjing, China', 'Madrid, Spain',
+    'Taiyuan, China', 'Shanghai, China', 'Cairo, Egypt', 'Medan, Indonesia', 'Belo Horizonte, Brazil',
+    'Paris, France', 'Nagoya, Japan', 'Sao Paulo, Brazil', 'Singapore, Singapore', 'Kiev, Ukraine',
+    'Pyongyang, North Korea', 'Faisalabad, Pakistan', 'Ankara, Turkey', 'Quezon City, Philippines'
+]
+
 
 def generate_oracle_prompt(city, question):
     prompt = f""" Answer the following question about {city}.
@@ -287,7 +291,7 @@ def is_city_guess(question: str) -> bool:
 
 
 @torch.no_grad()
-def generate_trajectories(model, tokenizer, num_trajectories):
+def generate_trajectories(model, tokenizer, num_runs):
     trained_model = model.eval()
     trained_tokenizer = tokenizer
     oracle_model = AutoModelForCausalLM.from_pretrained("microsoft/Phi-3-mini-4k-instruct").eval()
@@ -301,39 +305,46 @@ def generate_trajectories(model, tokenizer, num_trajectories):
     max_steps = 20
 
     trajectories = []
+    random.seed(42)
+    random_cities = random.sample(cities, 30)
 
-    for _ in range(num_trajectories):
-        target_city = random.choice(cities)
-        previous_qa = [] 
-        context_str = ""
-        questions = 0
-        while questions < max_steps: #trained_model did not generate final guess:
-            prompt = context_str + "Q:"
-            context = trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
-            input_ids = context['input_ids']
-            question_ids = trained_model.generate(**context, do_sample=True, top_p=0.9, temperature=0.7, max_new_tokens=30, pad_token_id=trained_tokenizer.eos_token_id)
-            question_ids = question_ids[:, input_ids.shape[1]:]  # Remove prompt tokens
-            question = trained_tokenizer.decode(question_ids[0], skip_special_tokens=True)
-            question = question.split("?")[0] + "?"
-            question = question.strip()
-            print(f"Q{questions + 1}: {question}")
-            context = oracle_tokenizer(generate_oracle_prompt(target_city, question), return_tensors="pt").to(device)
-            answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=100, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
-            input_ids = context['input_ids']
-            answer_ids = answer_ids[:, input_ids.shape[1]:]  
-            answer = oracle_tokenizer.decode(answer_ids[0], skip_special_tokens=True).strip()
-            stop_idx = answer.find("Question")
-            if stop_idx != -1:
-                answer = answer[:stop_idx].strip()
-            print(f"A{questions + 1}: {answer}")
-            previous_qa.append([question, answer])
-            context_str += f"Q:{question} A:{answer}\n"
-            questions += 1
-            if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
-                break
-        trajectories.append({"questions": [l[0] for l in previous_qa], "target_city": target_city.split(",")[0]})
+    for _ in range(num_runs):
+        for city in random_cities:
+            target_city = city
+            previous_qa = [] 
+            context_str = ""
+            questions = 0
+            print(f"{target_city}\n")
+            while questions < max_steps: #trained_model did not generate final guess:
+                prompt = context_str + "Q:"
+                context = trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
+                input_ids = context['input_ids']
+                question_ids = trained_model.generate(**context, do_sample=True, top_p=0.9, temperature=0.7, max_new_tokens=30, pad_token_id=trained_tokenizer.eos_token_id)
+                question_ids = question_ids[:, input_ids.shape[1]:]  # Remove prompt tokens
+                question = trained_tokenizer.decode(question_ids[0], skip_special_tokens=True)
+                question = question.split("?")[0] + "?"
+                question = question.strip()
+                print(f"Q{questions + 1}: {question}")
+                context = oracle_tokenizer(generate_oracle_prompt(target_city, question), return_tensors="pt").to(device)
+                answer_ids = oracle_model.generate(**context, do_sample=False, max_new_tokens=100, pad_token_id=oracle_tokenizer.eos_token_id,  eos_token_id=oracle_tokenizer.convert_tokens_to_ids("Question"))
+                input_ids = context['input_ids']
+                answer_ids = answer_ids[:, input_ids.shape[1]:]  
+                answer = oracle_tokenizer.decode(answer_ids[0], skip_special_tokens=True).strip()
+                stop_cues = ["Question", "Answer"]
+                # truncate at the first cue that appears
+                for cue in stop_cues:
+                    stop_idx = answer.find(cue)
+                    if stop_idx != -1:
+                        answer = answer[:stop_idx].strip()
+                        break
+                print(f"A{questions + 1}: {answer}")
+                previous_qa.append([question, answer])
+                context_str += f"Q:{question} A:{answer}\n"
+                questions += 1
+                if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
+                    break
+            trajectories.append({"questions": [l[0] for l in previous_qa], "target_city": target_city.split(",")[0]})
     return trajectories
-
 
 def reward_trajectories(trajectories):
     rewards = []
@@ -346,7 +357,7 @@ def reward_trajectories(trajectories):
     return rewards
 
 def run_evaluation(model, tokenizer, step):
-    trajectories = generate_trajectories(model, tokenizer, 20)
+    trajectories = generate_trajectories(model, tokenizer, 1)
     rewards = reward_trajectories(trajectories)
     avg_reward = np.mean(rewards)
     std_reward = np.std(rewards)
@@ -355,16 +366,14 @@ def run_evaluation(model, tokenizer, step):
     print(f"Std reward: {std_reward}")
     print(f"Accuracy: {accuracy}")
 
-    with open(f"bc/summary_bc_{step}.out", "w") as f:
+    with open(f"bc/summary_bc_filtered2_{step}.out", "w") as f:
         f.write(f"Average reward: {avg_reward}\n")
         f.write(f"Std reward: {std_reward}\n")
         f.write(f"Accuracy: {accuracy}\n")
 
-    with open(f"bc/trajectories_bc_{step}.out", "w") as f:
+    with open(f"bc/trajectories_bc_filtered2_{step}.out", "w") as f:
         json.dump(trajectories, f, indent=2)
     
-
-
 
 def train_model2(conversations):
     #openai-community/gpt2-xl
@@ -401,7 +410,7 @@ def train_model2(conversations):
         },
     )
 
-    dataset = QADataset2(conversations, tokenizer)  
+    dataset = QADataset(conversations, tokenizer, True)  
     dataloader = DataLoader(dataset, batch_size=run.config["batch_size"], shuffle=True)
 
     optimizer = AdamW(model.parameters(), lr=run.config["learning_rate"])
@@ -463,13 +472,13 @@ def train_model2(conversations):
 
     run.finish()
 
-    model.save_pretrained("bc/fine_tuned_gpt2_medium_lora_filtered")
-    tokenizer.save_pretrained("bc/fine_tuned_gpt2_medium_lora_filtered")
+    model.save_pretrained("bc/fine_tuned_gpt2_medium_lora_filtered2")
+    tokenizer.save_pretrained("bc/fine_tuned_gpt2_medium_lora_filtered2")
 
     
 if __name__ == "__main__":
 
-    with open('train.json', 'r') as f:
+    with open('train2.json', 'r') as f:
         conversations = json.load(f)
 
     train_model2(conversations)

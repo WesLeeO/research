@@ -4,13 +4,11 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 
 class MCDataset(Dataset):
-    def __init__(self, conversations, tokenizer, gamma=0.99, max_conversations=5000):
+    def __init__(self, conversations, tokenizer, gamma=0.99):
         self.data = []
         count = 0
         for convo in conversations:
-            if convo['correct']:
-                if max_conversations and count >= max_conversations:
-                    break
+            if convo['word'].split(',')[0].lower() in convo['lines'][-1].split('?')[0].lower(): #BC-filtered:
                 texts = []
                 for line in convo["lines"]:
                     q, a = line.split("?", 1)

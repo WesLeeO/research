@@ -15,25 +15,28 @@ import random
 import numpy as np
 
 
-cities = ['guayaquil,ecuador', 'taipei,china', 'zibo,china', 'jinan,china', 'alexandria,egypt', 
-'berlin,germany', 'sydney,australia', 'istanbul,turkey', 'osaka,japan', 'hong kong,china', 'bogota,colombia', 'jakarta,indonesia', 
-'bogor,indonesia', 'bandung,indonesia', 'calcutta,india', 'tashkent,uzbekistan', 
-'chengdu,china', 'giza,egypt', 'semarang,indonesia', 'lima,peru', 'hyderabad,india', 
-'havanna,cuba', 'haerbin,china', 'izmir,turkey', 'brasilia,brazil', 'shenyang,china', 'delhi,india', 
-'baghdad,iraq', 'rio de janeiro,brazil', 'london,uk', 'rome,italy', 'los angeles,usa', 
-'mexico city,mexico', 'bucuresti,romania', 'ho chi minh city,vietnam', 'taega,south korea', 
-'toronto,canada', 'surabaya,indonesia', 'bangalore,india', 'fortaleza,brazil', 'yokohama,japan', 
-'salvador,brazil', 'st petersburg,russia', 'beijing,china', 'wuhan,china', 'karachi,pakistan', 
-'cirebon,indonesia', 'dhaka,bangladesh', 'chicago,usa', 'bombay,india', 'guangzhou,china', 
-'santiago,chile', 'budapest,hungary', 'tehran,iran', 'houston,usa', 'casablanca,morocco', 'kinshaha,congo', 
-'malang,indonesia', 'qingdao,china', 'xian,china', 'caracas,venezuela', 'abidjan,cote d’ivorie', 
-'medellin,colombia', 'tokyo,japan', 'madras,india', 'kanpur,india', 'bangkok,thailand', 'addis ababa,ethopia', 
-'pusan,south korea', 'dalian,china', 'tianjin,china', 'mashhad,iran', 'yangon,myanmar', 
-'sukabumi,indonesia', 'moscow,russia', 'inchon,south korea', 'buenos aires,argentina', 'cali,colombia', 'new york,usa', 
-'lahore,pakistan', 'ahmedabad,india', 'chongqing,china', 'changchun,china', 'nanjing,china', 'madrid,spain', 'taiyuan,china', 
-'shanghai,china', 'cairo,egypt', 'medan,indonesia', 'belo horizonte,brazil', 'paris,france', 'nagoya,japan', 
-'sao paulo,brazil', 'singapore,singapore', 'kiev,ukraine', 'pyong yang,north korea', 'faisalabad,pakistan', 'ankara,turkey', 'quezon city,philippines']
-
+cities = [
+    'Guayaquil, Ecuador', 'Taipei, China', 'Zibo, China', 'Jinan, China', 'Alexandria, Egypt',
+    'Berlin, Germany', 'Sydney, Australia', 'Istanbul, Turkey', 'Osaka, Japan', 'Hong Kong, China',
+    'Bogota, Colombia', 'Jakarta, Indonesia', 'Bogor, Indonesia', 'Bandung, Indonesia', 'Kolkata, India',
+    'Tashkent, Uzbekistan', 'Chengdu, China', 'Giza, Egypt', 'Semarang, Indonesia', 'Lima, Peru',
+    'Hyderabad, India', 'Havana, Cuba', 'Harbin, China', 'Izmir, Turkey', 'Brasilia, Brazil',
+    'Shenyang, China', 'Delhi, India', 'Baghdad, Iraq', 'Rio de Janeiro, Brazil', 'London, UK',
+    'Rome, Italy', 'Los Angeles, USA', 'Mexico City, Mexico', 'Bucharest, Romania', 'Ho Chi Minh City, Vietnam',
+    'Daegu, South Korea', 'Toronto, Canada', 'Surabaya, Indonesia', 'Bangalore, India', 'Fortaleza, Brazil',
+    'Yokohama, Japan', 'Salvador, Brazil', 'St. Petersburg, Russia', 'Beijing, China', 'Wuhan, China',
+    'Karachi, Pakistan', 'Cirebon, Indonesia', 'Dhaka, Bangladesh', 'Chicago, USA', 'Mumbai, India',
+    'Guangzhou, China', 'Santiago, Chile', 'Budapest, Hungary', 'Tehran, Iran', 'Houston, USA',
+    'Casablanca, Morocco', 'Kinshasa, Congo', 'Malang, Indonesia', 'Qingdao, China', 'Xi’an, China',
+    'Caracas, Venezuela', 'Abidjan, Côte d’Ivoire', 'Medellin, Colombia', 'Tokyo, Japan', 'Chennai, India',
+    'Kanpur, India', 'Bangkok, Thailand', 'Addis Ababa, Ethiopia', 'Busan, South Korea', 'Dalian, China',
+    'Tianjin, China', 'Mashhad, Iran', 'Yangon, Myanmar', 'Sukabumi, Indonesia', 'Moscow, Russia',
+    'Incheon, South Korea', 'Buenos Aires, Argentina', 'Cali, Colombia', 'New York, USA', 'Lahore, Pakistan',
+    'Ahmedabad, India', 'Chongqing, China', 'Changchun, China', 'Nanjing, China', 'Madrid, Spain',
+    'Taiyuan, China', 'Shanghai, China', 'Cairo, Egypt', 'Medan, Indonesia', 'Belo Horizonte, Brazil',
+    'Paris, France', 'Nagoya, Japan', 'São Paulo, Brazil', 'Singapore, Singapore', 'Kiev, Ukraine',
+    'Pyongyang, North Korea', 'Faisalabad, Pakistan', 'Ankara, Turkey', 'Quezon City, Philippines'
+]
 
 
 def generate_oracle_prompt(city, question):
@@ -120,7 +123,7 @@ def is_city_guess(question: str) -> bool:
     return first_char.isupper()
 
 @torch.no_grad()
-def generate_trajectories(gpt2MC, num_trajectories):
+def generate_trajectories(gpt2MC, num_runs, alpha):
     trained_model = gpt2MC.model.eval()
     trained_tokenizer = gpt2MC.tokenizer
     oracle_model = AutoModelForCausalLM.from_pretrained("microsoft/Phi-3-mini-4k-instruct").eval()
@@ -134,88 +137,93 @@ def generate_trajectories(gpt2MC, num_trajectories):
     trajectories = []
     max_steps = 20
 
-    for _ in range(num_trajectories):
-        target_city = random.choice(cities)
-        context_str = ""
-        previous_qa = []
-        questions = 0
+    random.seed(42)
+    random_cities = random.sample(cities, 30)
 
-        while questions < max_steps:
-            prompt = context_str + "Q:"
-            context = trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
-            input_ids = context["input_ids"]
-            initial_length = input_ids.size(1)
+    for _ in range(num_runs):
+        for city in random_cities:
+            target_city = city
+            context_str = ""
+            previous_qa = []
+            questions = 0
+            print(f"\n{target_city}\n")
+            while questions < max_steps:
+                prompt = context_str + "Q:"
+                context = trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
+                input_ids = context["input_ids"]
+                initial_length = input_ids.size(1)
 
-            # Efficient autoregressive decoding loop
-            
-            outputs = trained_model(
-                input_ids=input_ids,
-                past_key_values=None,
-                use_cache=True,
-                output_hidden_states=True
-            )
-
-            past_key_values = outputs.past_key_values
-
-            for _ in range(30):
-                last_hidden = outputs.hidden_states[-1][:, -1, :]     # (batch, hidden)
-                bias = gpt2MC.q_function(last_hidden)                 # (batch, vocab)
-                scores = outputs.logits[:, -1, :]                     # (batch, vocab)
-                probs = F.softmax(scores, dim=-1)
-                alpha = -0.1 ##??? tested -1 -0.1 should be more smooth/ penalize less small rtg tokens
-                probs = probs ** (alpha * bias)
-                probs = F.softmax(scores, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-                input_ids = torch.cat([input_ids, next_token], dim=-1)
-
-                if next_token.item() == trained_tokenizer.eos_token_id:
-                    break
-
+                # Efficient autoregressive decoding loop
+                
                 outputs = trained_model(
-                    input_ids=next_token,
-                    past_key_values=past_key_values,
+                    input_ids=input_ids,
+                    past_key_values=None,
                     use_cache=True,
                     output_hidden_states=True
                 )
+
                 past_key_values = outputs.past_key_values
 
-            question_ids = input_ids[:, initial_length:]
-            question = trained_tokenizer.decode(question_ids[0], skip_special_tokens=True)
-            question = question.split("?")[0].strip() + "?"
-            print(f"Q{questions + 1}: {question}")
-            # --- Generate answer from oracle ---
-            oracle_prompt = generate_oracle_prompt(target_city, question)
-            oracle_context = oracle_tokenizer(oracle_prompt, return_tensors="pt").to(device)
-            answer_ids = oracle_model.generate(
-                **oracle_context,
-                do_sample=False,
-                max_new_tokens=100,
-                pad_token_id=oracle_tokenizer.eos_token_id,
-                eos_token_id=oracle_tokenizer.eos_token_id 
-            )
-            ans_ids = answer_ids[:, oracle_context["input_ids"].shape[1]:]
-            answer = oracle_tokenizer.decode(ans_ids[0], skip_special_tokens=True).strip()
-            stop_cues = ["Question", "Answer"]
-            # truncate at the first cue that appears
-            for cue in stop_cues:
-                stop_idx = answer.find(cue)
-                if stop_idx != -1:
-                    answer = answer[:stop_idx].strip()
-                    break
-            print(f"A{questions + 1}: {answer}")
-            previous_qa.append([question, answer])
-            context_str += f"Q:{question} A:{answer}\n"
-            questions += 1
+                for _ in range(30):
+                    last_hidden = outputs.hidden_states[-1][:, -1, :]     # (batch, hidden)
+                    bias = gpt2MC.q_function(last_hidden)                 # (batch, vocab)
+                    scores = outputs.logits[:, -1, :]                     # (batch, vocab)
+                    probs = F.softmax(scores, dim=-1)
+                  #  alpha = -0.5 ##??? tested -0.1 should be more smooth/ penalize less small rtg tokens #-0.5
+                    probs = probs ** (alpha * bias)
+                    probs = F.softmax(scores, dim=-1)
+                    next_token = torch.multinomial(probs, num_samples=1)
+                    input_ids = torch.cat([input_ids, next_token], dim=-1)
 
-            if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
-                break
+                    if next_token.item() == trained_tokenizer.eos_token_id:
+                        break
 
-        trajectories.append({
-            "questions": [q for q, _ in previous_qa],
-            "target_city": target_city.split(",")[0]
-        })
+                    outputs = trained_model(
+                        input_ids=next_token,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                        output_hidden_states=True
+                    )
+                    past_key_values = outputs.past_key_values
+
+                question_ids = input_ids[:, initial_length:]
+                question = trained_tokenizer.decode(question_ids[0], skip_special_tokens=True)
+                question = question.split("?")[0].strip() + "?"
+                print(f"Q{questions + 1}: {question}")
+                # --- Generate answer from oracle ---
+                oracle_prompt = generate_oracle_prompt(target_city, question)
+                oracle_context = oracle_tokenizer(oracle_prompt, return_tensors="pt").to(device)
+                answer_ids = oracle_model.generate(
+                    **oracle_context,
+                    do_sample=False,
+                    max_new_tokens=100,
+                    pad_token_id=oracle_tokenizer.eos_token_id,
+                    eos_token_id=oracle_tokenizer.eos_token_id 
+                )
+                ans_ids = answer_ids[:, oracle_context["input_ids"].shape[1]:]
+                answer = oracle_tokenizer.decode(ans_ids[0], skip_special_tokens=True).strip()
+                stop_cues = ["Question", "Answer"]
+                # truncate at the first cue that appears
+                for cue in stop_cues:
+                    stop_idx = answer.find(cue)
+                    if stop_idx != -1:
+                        answer = answer[:stop_idx].strip()
+                        break
+                print(f"A{questions + 1}: {answer}")
+                previous_qa.append([question, answer])
+                context_str += f"Q:{question} A:{answer}\n"
+                questions += 1
+
+                if is_city_guess(question) or target_city.split(",")[0].lower() in question.lower():
+                    break       
+            
+            trajectories.append({
+                "questions": [q for q, _ in previous_qa],
+                "target_city": target_city.split(",")[0]
+            })
 
     return trajectories
+
     """
     trained_model = gpt2MC.model
     trained_tokenizer = gpt2MC.tokenizer
@@ -274,8 +282,8 @@ def reward_trajectories(trajectories):
         rewards.append(reward)
     return rewards
 
-def run_evaluation(gpt2MC, step):
-    trajectories = generate_trajectories(gpt2MC, 20)
+def run_evaluation(gpt2MC, epoch, step, alpha):
+    trajectories = generate_trajectories(gpt2MC, 1, alpha)
     rewards = reward_trajectories(trajectories)
     avg_reward = np.mean(rewards)
     std_reward = np.std(rewards)
@@ -292,16 +300,7 @@ def run_evaluation(gpt2MC, step):
     with open(f"mc/trajectories_mc_filtered_{step}.out", "w") as f:
         json.dump(trajectories, f, indent=2)
     
-
-
-if __name__ == "__main__":
-    
-    with open('train.json', 'r') as f:
-        conversations = json.load(f)
-
-    count = 0
-    max_conversations = 40_000
-
+def run_evaluation2(alpha):
     base_model_path = "./gpt2-medium-offline"
     sft_model_path = "bc/fine_tuned_gpt2_medium_lora_filtered"
 
@@ -312,13 +311,50 @@ if __name__ == "__main__":
     gpt2MC = GPT2MC(sft_model, tokenizer)
     model = gpt2MC.model 
 
+    state_dict = torch.load("mc/q_function_f.pth", map_location="cpu")
+    gpt2MC.q_function.load_state_dict(state_dict)
+
+    trajectories = generate_trajectories(gpt2MC, 1, alpha)
+    rewards = reward_trajectories(trajectories)
+
+    avg_reward = np.mean(rewards)
+    std_reward = np.std(rewards)
+    accuracy = np.sum([t['target_city'].lower() in t['questions'][-1].lower() for t in trajectories]) / len(trajectories)
+    print(f"Average reward: {avg_reward}")
+    print(f"Std reward: {std_reward}")
+    print(f"Accuracy: {accuracy}")
+
+    with open(f"mc/summary_{-alpha}.out", "w") as f:
+        f.write(f"Average reward: {avg_reward}\n")
+        f.write(f"Std reward: {std_reward}\n")
+        f.write(f"Accuracy: {accuracy}\n")
+
+    with open(f"mc/trajectories_{-alpha}.out", "w") as f:
+        json.dump(trajectories, f, indent=2)
+
+
+if __name__ == "__main__":
+    run_evaluation2(alpha=-0.1)
+    """
+    with open('train2.json', 'r') as f:
+        conversations = json.load(f)
+
+    base_model_path = "./gpt2-medium-offline"
+    sft_model_path = "bc/fine_tuned_gpt2_medium_lora_filtered"
+
+    base_model = AutoModelForCausalLM.from_pretrained(base_model_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(sft_model_path)
+    sft_model = PeftModel.from_pretrained(base_model, sft_model_path)
+
+    gpt2MC = GPT2MC(sft_model, tokenizer)
+    model = gpt2MC.model 
     #run_evaluation(gpt2MC, 0)
 
     run = wandb.init(
         project="research-multi-turn-RL-with-LMs",
         name="gpt2-medium-mc-lora-filtered",
         config={
-            "learning_rate": 1e-4,       # smaller LR for stability
+            "learning_rate": 1e-4,       
             "batch_size": 4,
             "max_length": tokenizer.model_max_length,
             "epochs": 1,
@@ -327,7 +363,7 @@ if __name__ == "__main__":
         },
     )
 
-    dataset = MCDataset(conversations, tokenizer, max_conversations=max_conversations)    
+    dataset = MCDataset(conversations, tokenizer)    
     dataloader = DataLoader(dataset, batch_size=run.config['batch_size'], shuffle=True) #, collate_fn=lambda b: collate_fn(b, tokenizer))
 
     total_steps = len(dataloader) * run.config["epochs"]
@@ -371,10 +407,10 @@ if __name__ == "__main__":
             #20_000 / 4 = 5_000 batches
             # Every 1250 batches run evaluation (should be 2 (epochs) x 4 (ev/epoch) = 8)
             if (step + 1) % (len(dataloader) // 4) == 0:
-                run_evaluation(gpt2MC, step+1)
+                run_evaluation(gpt2MC, epoch+1, step+1, -0.5)
 
     torch.save(gpt2MC.q_function.state_dict(), "mc/q_function_f.pth")
-
+    """
             
          
         
