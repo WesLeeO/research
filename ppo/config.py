@@ -10,6 +10,8 @@ class TrainingConfig:
     sft_model_path: str = "bc/fine_tuned_gpt2_medium_lora_filtered"
     rl_output_dir: str = "ppo/rl_models"
     
+    max_context_length: str = 1024
+
     # Oracle configuration
     oracle_model: str = "microsoft/Phi-3-mini-4k-instruct"
     
@@ -35,18 +37,18 @@ class TrainingConfig:
     temperature: float = 0.7
     top_k: int = 50
     top_p: float = 0.95
-    
-    # Reward parameters
-    question_penalty: float = -0.1
-    correct_guess_reward: float = 10.0
-    wrong_guess_penalty: float = -5.0
-    efficiency_bonus_weight: float = 5.0
-    
+        
     # Training schedule
     episodes_per_iteration: int = 8
     log_every: int = 10
     eval_every: int = 50
-    save_every: int = 100
+    #save_every: int = 100
+
+    project: str = "research-multi-turn-RL-with-LMs"
+    name: str ="gpt2-medium-ppo"
+    log_with: str = "wandb"
+
+
     
     """
     # Logging

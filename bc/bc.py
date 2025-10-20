@@ -9,7 +9,7 @@ from environment import *
 import tqdm
 import wandb
 from peft import LoraConfig, get_peft_model
-from torch.cuda.amp import autocast, GradScaler
+#from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 import random
 

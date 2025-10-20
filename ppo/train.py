@@ -89,14 +89,13 @@ class CityGuesserRLTrainer:
             "max_new_tokens": config.max_new_tokens,
             "temperature": config.temperature,
             "do_sample": True,
-            "top_k": config.top_k,
             "top_p": config.top_p,
             "pad_token_id": self.tokenizer.eos_token_id,
             "eos_token_id": self.tokenizer.eos_token_id,
         }
         
         # Evaluator
-        self.evaluator = Evaluator(self.env, self.tokenizer)
+        self.evaluator = Evaluator(self.env, self.tokenizer, self.generation_kwargs)
     
     def create_prompt(self, state: dict) -> str:
         """
@@ -126,8 +125,8 @@ class CityGuesserRLTrainer:
         """
         state = self.env.reset()
         
-        query_tensors = []
-        response_tensors = []
+        context_tensors = []
+        question_tensors = []
         rewards = []
         
         done = False
@@ -138,31 +137,35 @@ class CityGuesserRLTrainer:
             prompt = self.create_prompt(state)
             
             # Tokenize prompt
-            query_tensor = self.tokenizer.encode(
+            context_tensor = self.tokenizer.encode(
                 prompt, 
-                return_tensors="pt"
+                return_tensors="pt", 
+                truncation=True,
+                max_length=self.config.max_context_length,
+                truncation_side="left" 
             ).squeeze().to(self.device)
             
             # Generate response using current policy
             with torch.no_grad():
-                response_tensor = self.ppo_trainer.generate(
-                    query_tensor.unsqueeze(0),
+                question_tensor = self.ppo_trainer.generate(
+                    context_tensor.unsqueeze(0),
                     return_prompt=False,  # Only return generated part
                     **self.generation_kwargs
                 ).squeeze()
             
             # Decode response
-            response_text = self.tokenizer.decode(
-                response_tensor,
+            next_question = self.tokenizer.decode(
+                question_tensor,
                 skip_special_tokens=True
             ).strip()
-            
+
+            next_question = (next_question.split("?")[0] + "?").strip()
             # Take action in environment
-            state, reward, done, info = self.env.step(response_text)
+            state, reward, done, info = self.env.step(next_question)
             
             # Store rollout data
-            query_tensors.append(query_tensor)
-            response_tensors.append(response_tensor)
+            context_tensors.append(context_tensor)
+            question_tensors.append(question_tensor)
             rewards.append(reward)
             
             total_reward += reward
@@ -180,13 +183,13 @@ class CityGuesserRLTrainer:
         episode_info = {
             "total_reward": total_reward,
             "correct": info.get("correct", False),
-            "questions_used": info.get("questions_used", len(query_tensors)),
+            "questions_used": info.get("questions_used", len(question_tensors)),
             "target_city": info.get("target_city", "unknown"),
             "efficiency": info.get("efficiency", 0.0),
             "timeout": info.get("timeout", False)
         }
         
-        return query_tensors, response_tensors, rewards, episode_info
+        return context_tensors, question_tensors, rewards, episode_info
     
     def collect_batch(self, num_episodes: int) -> Tuple[List, List, List, List]:
         """
@@ -198,20 +201,19 @@ class CityGuesserRLTrainer:
         Returns:
             All queries, responses, rewards, and episode info
         """
-        all_queries = []
-        all_responses = []
+        all_contexts = []
+        all_questions = []
         all_rewards = []
         all_infos = []
         
         for _ in range(num_episodes):
-            queries, responses, rewards, info = self.play_episode()
-            
-            all_queries.extend(queries)
-            all_responses.extend(responses)
+            contexts, questions, rewards, info = self.play_episode()
+            all_contexts.extend(contexts)
+            all_questions.extend(questions)
             all_rewards.extend(rewards)
             all_infos.append(info)
         
-        return all_queries, all_responses, all_rewards, all_infos
+        return all_contexts, all_questions, all_rewards, all_infos
     
     def train(self, num_iterations: int, episodes_per_iteration: int = 8):
         """
@@ -226,17 +228,17 @@ class CityGuesserRLTrainer:
         
         for iteration in tqdm(range(num_iterations)):
             # Collect batch of episodes
-            queries, responses, rewards, infos = self.collect_batch(
+            all_contexts, all_questions, all_rewards, all_infos = self.collect_batch(
                 episodes_per_iteration
             )
             
             # Convert rewards to tensors
-            reward_tensors = [torch.tensor(r, dtype=torch.float32) for r in rewards]
+            reward_tensors = [torch.tensor(r, dtype=torch.float32) for r in all_rewards]
             
             # PPO update step - THIS IS WHERE TRL DOES THE MAGIC
             stats = self.ppo_trainer.step(
-                queries,
-                responses,
+                all_contexts,
+                all_questions,
                 reward_tensors
             )
             
@@ -253,11 +255,11 @@ class CityGuesserRLTrainer:
                 self._log_eval_stats(iteration, eval_results)
             
             # Save checkpoint
-            if iteration % self.config.save_every == 0:
-                self.save_checkpoint(f"checkpoint_iter_{iteration}")
+          #  if iteration % self.config.save_every == 0:
+          #      self.save_checkpoint(f"checkpoint_iter_{iteration}")
         
         # Final save
-        self.save_checkpoint("final_model")
+        self.save_checkpoint("ppo_model")
         print("Training complete!")
     
     def _log_training_stats(self, iteration: int, infos: List[dict], stats: dict):
@@ -300,16 +302,9 @@ class CityGuesserRLTrainer:
         print(f"EVALUATION at iteration {iteration}")
         print(f"Success Rate: {results['success_rate']:.2%}")
         print(f"Avg Questions: {results['avg_questions']:.1f}")
-        print(f"Avg Efficiency: {results['avg_efficiency']:.2%}")
+        print(f"Avg Reward: {results['avg_reward']:.2%}")
         print(f"{'='*60}\n")
-        
-        if self.config.log_with == "wandb":
-            wandb.log({
-                "iteration": iteration,
-                "eval/success_rate": results['success_rate'],
-                "eval/avg_questions": results['avg_questions'],
-                "eval/efficiency": results['avg_efficiency'],
-            })
+  
     
     def save_checkpoint(self, name: str):
         """Save model checkpoint."""
@@ -347,9 +342,18 @@ if __name__ == "__main__":
     'Pyongyang, North Korea', 'Faisalabad, Pakistan', 'Ankara, Turkey', 'Quezon City, Philippines'
 ]
 
+    
     # Load configuration
     config = TrainingConfig()
     
+    if config.log_with == "wandb":
+
+        wandb.init(
+            project=config.project,
+            name=config.name,
+            config=config.__dict__
+        )
+
     # Load city data
     city_dataset = CityDataset(CITIES)
     train_cities, test_cities = city_dataset.get_train_test_split(

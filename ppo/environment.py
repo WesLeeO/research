@@ -59,11 +59,6 @@ class LLMOracle:
 class CityGuessingEnvironment:
     """
     Environment for city guessing game with SPARSE REWARDS.
-    
-    Reward structure:
-    - Every question: -1
-    - Correct guess: +reward (e.g., 10 + efficiency bonus)
-    - Wrong guess: -penalty (e.g., -5)
     """
     
     def __init__(
