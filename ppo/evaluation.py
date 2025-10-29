@@ -17,7 +17,7 @@ class Evaluator:
         self.tokenizer = tokenizer
         self.max_context_length = tokenizer.model_max_length
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.generation_kwargs = generation_kwargs
+        self.generations_kwargs = generations_kwargs
     
     def evaluate(
         self, 
@@ -96,7 +96,7 @@ class Evaluator:
                 prompt,
                 return_tensors="pt",
                 truncation=True,
-                max_length=self.max_context_length,
+                max_length=self.max_context_length - 30,
                 truncation_side="left"
             ).squeeze().to(self.device)
             
@@ -106,7 +106,7 @@ class Evaluator:
                 question_tensor = model.pretrained_model.generate(
                     context_tensor.unsqueeze(0),
                     return_prompt=False,
-                    **self.generation_kwargs
+                    **self.generation_kwargs_question
                 )            
 
             next_question = self.tokenizer.decode(

@@ -18,22 +18,27 @@ class TrainingConfig:
     # Game settings
     max_questions: int = 20
     
+    
     # PPO hyperparameters
     rl_learning_rate: float = 1e-4
+    value_learning_rate: float = 1e-4
     rl_batch_size: int = 8
     rl_mini_batch_size: int = 2
-    gradient_accumulation_steps: int = 1
-    ppo_epochs: int = 4
+    num_ppo_epochs: int = 4
     max_grad_norm: float = 0.5
-    
+    vf_coef: float = 0.5
+
     # PPO-specific
-    init_kl_coef: float = 0.2
+    kl_coef: float = 0.05
     target_kl: float = 6.0
     gamma: float = 0.99  # Discount factor
     lam: float = 0.95   # GAE lambda
-    
+    value_clip_epsilon: float = 0.2
+    cliprange : float = 0.2
+
     # Generation parameters
-    max_new_tokens: int = 50
+    max_new_tokens_question: int = 30
+    max_new_tokens_answer: int = 100
     temperature: float = 0.7
     top_k: int = 50
     top_p: float = 0.95
