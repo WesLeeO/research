@@ -2,6 +2,7 @@ import random
 from typing import List, Dict, Tuple, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import re
 
 
 class LLMOracle:
@@ -32,7 +33,7 @@ class LLMOracle:
             skip_special_tokens=True
         ).strip()
 
-        stop_cues = ["Question", "Answer"]
+        stop_cues = ["\n", "Question", "Answer"]
 
         for cue in stop_cues:
             stop_idx = answer.find(cue)
@@ -62,7 +63,9 @@ class CityGuessingEnvironment:
         oracle: LLMOracle,
         max_questions: int = 20,
         question_penalty: float = -1.0,
-        correct_reward: float = 0.0
+        repetition_penalty: float = -1.0,
+        no_guess_penalty: float = -10.0,
+        correct_reward: float = 0.0,
     ):
         self.cities = cities
         self.oracle = oracle
@@ -70,11 +73,13 @@ class CityGuessingEnvironment:
         
         # Reward parameters
         self.question_penalty = question_penalty  # -1 per question
+        self.repetition_penalty = repetition_penalty
+        self.no_guess_penalty = no_guess_penalty
         self.correct_reward = correct_reward
-        self.reset()
         
     def reset(self):
         self.target_city = random.choice(self.cities)
+        print(self.target_city)
         self.questions_asked = 0
         self.history = []
         self.game_over = False
@@ -87,10 +92,8 @@ class CityGuessingEnvironment:
             return self._process_guess(action)
         else:
             return self._process_question(action)
-    
+    """
     def _is_guess(self, action: str) -> bool:
-        """Check if action is a final guess."""
-    
         guess_indicators = [
             "Is the city you are from", 
             "This could help narrow down the possibilities about the city being"
@@ -98,17 +101,36 @@ class CityGuessingEnvironment:
         
         return any(indicator.lower() in action.lower() for indicator in guess_indicators)
     
+    """
+
+    def _is_guess(self, action: str) -> bool:
+        """Check if action is a final guess."""
+        city_guess_pattern = r"^Is the city you are from\s*[A-Z].*$"
+        second_indicator = "This could help narrow down the possibilities about the city being"
+        return bool(re.match(city_guess_pattern, action)) or second_indicator.lower() in action.lower()
+
+    
     def _process_question(self, question: str) -> Tuple[Dict, float, bool, Dict]:
 
         self.questions_asked += 1
         answer = self.oracle.answer_question(question, self.target_city)
-        
+        done = self.questions_asked == self.max_questions
+        reward = self.question_penalty
+   
+        for step in self.history:
+            if question == step['question']:
+                reward += self.repetition_penalty
+                break
+
+        if done: 
+            reward += self.no_guess_penalty
+
         self.history.append({
             "type": "question",
             "question": question,
             "answer": answer,
-            "reward": self.question_penalty,
-            "done": self.questions_asked == self.max_questions,
+            "reward": reward,
+            "done": done,
             "correct": False,
             "asked": self.questions_asked
         })
@@ -119,7 +141,7 @@ class CityGuessingEnvironment:
         self.game_over = True
         self.questions_asked += 1
         answer = self.oracle.answer_question(guess, self.target_city)
-        correct = self.target_city.split(',')[0].lower() in guess
+        correct = self.target_city.split(',')[0].lower() in guess.lower()
         reward = self.correct_reward if correct else self.question_penalty
  
         self.history.append({

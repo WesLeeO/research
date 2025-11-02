@@ -16,16 +16,31 @@ from config import TrainingConfig
 from evaluation import Evaluator
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
+import gc
+import json
+
 
 def compute_token_logprobs_from_logits(logits: torch.FloatTensor, token_ids: torch.LongTensor) -> torch.FloatTensor:
-    """
-    logits: [B, L, V]
-    token_ids: [B, L]
-    returns: token_logprobs [B, L]
-    """
-    log_probs = F.log_softmax(logits, dim=-1)
-    token_logprobs = log_probs.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)
-    return token_logprobs  # [B, L]
+    log_probs = F.log_softmax(logits[:, :-1, :], dim=-1) 
+    target_ids = token_ids[:, 1:]                   
+    token_logprobs = log_probs.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)
+    return token_logprobs
+
+def kl_divergence(ref_logits: torch.FloatTensor, new_logits: torch.FloatTensor, mask: torch.FloatTensor) -> torch.FloatTensor:
+    log_p = F.log_softmax(ref_logits, dim=-1)   # reference
+    log_q = F.log_softmax(new_logits, dim=-1)   # policy
+
+    # Probabilities
+    p = log_p.exp()
+
+    # KL(P || Q) = sum_i p_i (log p_i - log q_i)
+    kl_per_token = (p * (log_p - log_q)).sum(-1)  # [B, L]
+
+    # Masked mean
+    mask = mask.to(kl_per_token.dtype)
+    kl_loss = (kl_per_token * mask).sum() / (mask.sum() + 1e-8)
+
+    return kl_loss, kl_per_token
 
 
 def compute_gae_batch(rewards: torch.Tensor,
@@ -33,21 +48,6 @@ def compute_gae_batch(rewards: torch.Tensor,
                       mask: torch.Tensor,
                       gamma: float = 0.99,
                       lam: float = 0.95) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute GAE advantages and discounted returns for a batch of token-level trajectories.
-    Args:
-        rewards: [B, L] token-level rewards (zero for non-reward tokens)
-        values:  [B, L] value predictions (V(s_t) for each token position)
-        mask:    [B, L] binary mask (1 where token exists and valid; 0 for pad)
-        gamma, lam: hyperparams
-    Returns:
-        advantages: [B, L]
-        returns:    [B, L] (advantages + values)
-    Notes:
-        - mask should be 1 for real tokens (context or action); for GAE we *only* consider timesteps where mask==1.
-        - typically you will set rewards only on action tokens (e.g., last token of a question) and zero elsewhere.
-    """
-
     B, L = rewards.shape
     advantages = torch.zeros_like(rewards)
     returns = torch.zeros_like(rewards)
@@ -68,7 +68,6 @@ def compute_gae_batch(rewards: torch.Tensor,
         lastgaelam = 0
         adv = torch.zeros_like(r)
 
-        # backward recursion over valid (agent) tokens
         for t in reversed(range(length)):
             next_value = v[t + 1] if t + 1 < length else 0.0
             delta = r[t] + gamma * next_value - v[t]
@@ -111,7 +110,6 @@ def compute_gae_batch(rewards: torch.Tensor,
     """
 
 class CityGuesserRLTrainer:
-    """RL trainer for GuessMyCity using TRL PPO."""
 
     def __init__(self, base_model_path: str, sft_model_path: str, cities: List[str], config: TrainingConfig):
         self.config = config
@@ -131,21 +129,19 @@ class CityGuesserRLTrainer:
         for name, p in self.policy_model.named_parameters():
             if "lora" in name:
                 p.requires_grad = True
-
-
-        """
+        
         # Reference model (for KL)
         self.ref_model = PeftModel.from_pretrained(
             AutoModelForCausalLM.from_pretrained(base_model_path, local_files_only=True),
             sft_model_path
         )
-        """
+    
 
         # Move to GPU
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.policy_model.to(self.device, dtype=torch.bfloat16)
         self.value_head.to(self.device, dtype=torch.bfloat16)
-        #self.ref_model.to(self.device)
+        self.ref_model.to(self.device)
 
         # Environment & Oracle
         oracle = LLMOracle(model_name=config.oracle_model)
@@ -197,7 +193,7 @@ class CityGuesserRLTrainer:
         }
 
         # Evaluator
-        self.evaluator = Evaluator(self.env, self.tokenizer, self.generation_kwargs)
+        self.evaluator = Evaluator(self.env, self.tokenizer, self.generation_kwargs, cities, config)
 
     def create_prompt(self, env) -> str:
         prompt = ""
@@ -207,7 +203,6 @@ class CityGuesserRLTrainer:
         return prompt
 
     def play_episode(self):
-        """Play one episode and collect rollout data for PPO."""
         self.env.reset()
         print('-------------------------------')
         token_ids = []
@@ -220,10 +215,6 @@ class CityGuesserRLTrainer:
         done = False
         while not done:
             prompt = self.create_prompt(self.env)
-            print(f'Prompt: {prompt} \n')
-            # We only use context to generate; we DO NOT append raw context tokens to trajectory.
-            # Instead we append the generated question tokens + environment answer tokens.
-            trained_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024 - 30).to(device)
             context_tensor = self.tokenizer.encode(
                 prompt,
                 return_tensors="pt",
@@ -259,7 +250,6 @@ class CityGuesserRLTrainer:
 
         # convert to tensors (1D)
         token_ids = torch.tensor(token_ids, dtype=torch.long, device=self.device)
-        print('generated_tokens shape ', token_ids.shape)
         attention_mask = torch.tensor(attention_mask, dtype=torch.long, device=self.device)
         action_mask = torch.tensor(action_mask, dtype=torch.float32, device=self.device)
         token_rewards = torch.tensor(token_rewards, dtype=torch.float32, device=self.device)
@@ -296,7 +286,7 @@ class CityGuesserRLTrainer:
             "infos": infos
         }
 
-    def train(self, num_iterations: int, episodes_per_iteration: int = 4):
+    def train(self, num_iterations: int, episodes_per_iteration: int):
 
         policy_params = [p for p in self.policy_model.parameters() if p.requires_grad]
         value_params = [p for p in self.value_head.parameters()]
@@ -309,11 +299,9 @@ class CityGuesserRLTrainer:
             attention_mask = batch["attention_mask"]     # [B, L]
             action_mask = batch["action_mask"]           # [B, L] (1.0 on question tokens)
             rewards = batch["rewards"]                   # [B, L]
-            infos = batch["infos"]
+            infos = batch["infos"] # List of size B
 
             max_ctx = self.policy_model.config.n_positions
-
-            print('still large? ', input_ids.size(1)) # why so large
 
             if input_ids.size(1) > max_ctx:
                 input_ids = input_ids[:, -max_ctx:]              
@@ -323,42 +311,53 @@ class CityGuesserRLTrainer:
 
             B, L = input_ids.shape
 
-            # ---- 1) Evaluate old policy/value (no grad) ----
             with torch.no_grad():
+                ref_out = self.ref_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+                ref_logits = ref_out.logits
                 policy_out = self.policy_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
                 old_logits = policy_out.logits              # [B, L, V]
                 old_logprobs = compute_token_logprobs_from_logits(old_logits, input_ids)  # [B, L]
                 old_values = self.value_head(policy_out.hidden_states[-1]).squeeze(-1)
-            
+
+            del ref_out, policy_out, old_logits
+            gc.collect()
+            torch.cuda.empty_cache()
+
             gae_mask = attention_mask * action_mask
             advantages, returns = compute_gae_batch(rewards, old_values, gae_mask.bool(), self.config.gamma, self.config.lam)
             
             # Normalize advantages over action positions only
+            """
             adv_mask = (action_mask == 1) & (attention_mask == 1)
             flat_adv = advantages[adv_mask]
             if flat_adv.numel() > 0:
                 adv_mean = flat_adv.mean()
                 adv_std = flat_adv.std(unbiased=False) + 1e-8
                 advantages = (advantages - adv_mean) / adv_std
+            """
 
             for epoch in range(self.config.num_ppo_epochs):        
-                # ---- 3) Forward current policy/value to get new logprobs & values ----
                 policy_out_new = self.policy_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-                logits_new = policy_out_new.logits
-                new_logprobs = compute_token_logprobs_from_logits(logits_new, input_ids)  # [B, L]
+                new_logits = policy_out_new.logits
+                new_logprobs = compute_token_logprobs_from_logits(new_logits, input_ids)  # [B, L]
                 new_values = self.value_head(policy_out_new.hidden_states[-1]).squeeze(-1)
 
-                # ---- 4) Compute PPO losses only on action tokens ----
+                del policy_out_new
+                gc.collect()
+                torch.cuda.empty_cache()
+
                 # select action positions
                 mask = action_mask * attention_mask  # float mask
                 denom = mask.sum()
 
                 # Policy loss (clipped)
-                log_ratio = (new_logprobs - old_logprobs) * mask
+                mask_shifted = mask[:, 1:]     
+                advantages_shifted = advantages[:, 1:] 
+                log_ratio = new_logprobs - old_logprobs
                 ratio = torch.exp(log_ratio)
-                surr1 = ratio * advantages * mask
-                surr2 = torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange) * advantages * mask
-                policy_loss = -(torch.sum(torch.min(surr1, surr2)) / denom)
+                surr1 = ratio * advantages_shifted * mask_shifted
+                surr2 = torch.clamp(ratio, 1.0 - self.config.cliprange, 1.0 + self.config.cliprange) * advantages_shifted * mask_shifted
+                policy_loss = -(torch.sum(torch.min(surr1, surr2)) / mask_shifted.sum())
 
                 # Value loss (clipped)
                 value_clipped = old_values + torch.clamp(new_values - old_values, -self.config.value_clip_epsilon, self.config.value_clip_epsilon)
@@ -366,7 +365,10 @@ class CityGuesserRLTrainer:
                 vf_loss2 = (value_clipped - returns) ** 2
                 value_loss = torch.sum(torch.max(vf_loss1, vf_loss2) * mask) / denom
 
-                total_loss = policy_loss + self.config.vf_coef * value_loss
+                #KL divergence penalty
+                kl_loss, _ = kl_divergence(ref_logits, new_logits, mask)
+
+                total_loss = policy_loss + self.config.vf_coef * value_loss + self.config.kl_coef * kl_loss
                
                 policy_optim.zero_grad()
                 value_optim.zero_grad()
@@ -375,19 +377,23 @@ class CityGuesserRLTrainer:
                 torch.nn.utils.clip_grad_norm_(value_params, max_norm=self.config.max_grad_norm)
                 policy_optim.step()
                 value_optim.step()
+                del new_logits, new_logprobs, new_values
+                gc.collect()
+                torch.cuda.empty_cache()
 
 
-            # ---- 6) Logging & eval ----
-            if iteration % getattr(self.config, "log_every", 1) == 0:
-                success = sum(1 for inf in infos if inf.get("correct", False))
+            if iteration % self.config.log_every == 0:
+                success = sum(1 for inf in infos if inf["correct"])
                 avg_qs = sum(inf.get("asked", 0) for inf in infos) / len(infos)
-                print(f"Iter {iteration} | Loss {total_loss.item():.4f} | Policy {policy_loss.item():.4f} | Value {value_loss.item():.4f} | Success {success}/{len(infos)} | AvgQs {avg_qs:.1f}")
+                print(f"Iter {iteration} | Total Loss {total_loss.item():.4f} | Policy Loss {policy_loss.item():.4f} | Value Loss {value_loss.item():.4f} | KL Loss {kl_loss.item():.4f} | Success {success}/{len(infos)} | AvgQs {avg_qs:.1f}")
                 wandb.log({
                     "total_loss": total_loss.item(), 
                     "policy_loss": policy_loss.item(),
                     "value_loss": value_loss.item(),
-                    "sucess_rate": success/len(infos),
-                    "step": step + iteration * episodes_per_iteration
+                    "kl_loss": kl_loss.item(),
+                    "success_rate": success/len(infos),
+                    "avgQs": avg_qs,
+                    "step": epoch + iteration * self.config.num_ppo_epochs
                 })
 
             """
@@ -396,8 +402,8 @@ class CityGuesserRLTrainer:
                 self._log_eval_stats(iteration, results)
             """
 
-            if iteration % getattr(self.config, "save_every", 50) == 0:
-                self.save_checkpoint(f"ppo_model_iter_{iteration}")
+            if iteration % self.config.save_every == 0:
+                self.save_checkpoint(f"ppo_model_2_iter_{iteration}")
 
     
         self.save_checkpoint("ppo_model")
@@ -416,7 +422,8 @@ class CityGuesserRLTrainer:
     def save_checkpoint(self, name: str):
         path = os.path.join(self.config.rl_output_dir, name)
         self.policy_model.save_pretrained(path)
-        self.value_model.save_pretrained(path)
+        value_head_path = os.path.join(path, "value_head.pth")
+        torch.save(self.value_head.state_dict(), value_head_path)
         self.tokenizer.save_pretrained(path)
         print(f"Checkpoint saved to {path}")
     
@@ -450,12 +457,13 @@ if __name__ == "__main__":
 
     config = TrainingConfig()
     config_dict = asdict(config)
-
+    """
     wandb.init(
         project=config.project,
         name=config.name,
         config=config_dict
     )
+    """
 
     trainer = CityGuesserRLTrainer(
         base_model_path=config.base_model_path,
@@ -463,4 +471,12 @@ if __name__ == "__main__":
         cities=CITIES,
         config=config
     )
-    trainer.train(num_iterations=100, episodes_per_iteration=4)
+    #trainer.train(num_iterations=100, episodes_per_iteration=config.episodes_per_iteration)
+    model = PeftModel.from_pretrained(AutoModelForCausalLM.from_pretrained(config.base_model_path, local_files_only=True), "./ppo/rl_models/ppo_model")
+    metrics = trainer.evaluator.evaluate(model, 30)
+    with open(f"ppo/summary.out", "w") as f:
+        f.write(f"Average Length: {metrics['avg']}\n")
+        f.write(f"Accuracy: {metrics['accuracy']}\n")
+    with open(f"ppo/trajectories.out", "w") as f:
+        json.dump(metrics['trajectories'], f, indent=2)
+

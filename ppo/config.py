@@ -25,16 +25,15 @@ class TrainingConfig:
     rl_batch_size: int = 8
     rl_mini_batch_size: int = 2
     num_ppo_epochs: int = 4
-    max_grad_norm: float = 0.5
-    vf_coef: float = 0.5
-
-    # PPO-specific
-    kl_coef: float = 0.05
-    target_kl: float = 6.0
-    gamma: float = 0.99  # Discount factor
-    lam: float = 0.95   # GAE lambda
+    max_grad_norm: float = 1
+    vf_coef: float = 0.1
+    kl_coef: float = 1
     value_clip_epsilon: float = 0.2
     cliprange : float = 0.2
+
+    # PPO-specific
+    gamma: float = 0.99  # Discount factor
+    lam: float = 0.95   # GAE lambda
 
     # Generation parameters
     max_new_tokens_question: int = 30
@@ -44,10 +43,9 @@ class TrainingConfig:
     top_p: float = 0.95
         
     # Training schedule
-    episodes_per_iteration: int = 8
-    log_every: int = 10
-    eval_every: int = 50
-    #save_every: int = 100
+    episodes_per_iteration: int = 5
+    log_every: int = 1
+    save_every: int = 50
 
     project: str = "research-multi-turn-RL-with-LMs"
     name: str ="gpt2-medium-ppo"

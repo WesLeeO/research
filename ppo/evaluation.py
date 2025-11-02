@@ -1,12 +1,13 @@
 import torch
 from typing import Dict, List
 from tqdm import tqdm
+import random
 
 
 class Evaluator:
     """Evaluator for the city guessing game."""
     
-    def __init__(self, env, tokenizer, generations_kwargs):
+    def __init__(self, env, tokenizer, generation_kwargs, cities, config):
         """
         Args:
             env: CityGuessingEnvironment instance
@@ -17,129 +18,87 @@ class Evaluator:
         self.tokenizer = tokenizer
         self.max_context_length = tokenizer.model_max_length
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.generations_kwargs = generations_kwargs
+        self.generation_kwargs = generation_kwargs
+        self.cities = cities
+        self.config = config
     
-    def evaluate(
-        self, 
-        model, 
-        num_episodes: int = 20,
-        temperature: float = 0.7,
-        max_new_tokens: int = 50,
-    ) -> Dict[str, float]:
-        """
-        Evaluate the model on multiple episodes.
-        
-        Args:
-            model: The model to evaluate (with value head)
-            num_episodes: Number of episodes to run
-            temperature: Sampling temperature
-            max_new_tokens: Max tokens to generate per question
-            
-        Returns:
-            Dictionary with evaluation metrics
-        """
+    def evaluate(self, model, num_episodes) -> Dict[str, float]:
+  
         model.eval()  # Set to eval mode
         
         results = {
-            "successes": 0,
-            "total_questions": 0,
-            "total_rewards": 0,
-            "episodes": []
+            "correct": 0,
+            "asked": 0,
+            "trajectories": []
         }
+
+        random.seed(42)
+        random_cities = random.sample(self.cities, 30)
         
         print(f"\nEvaluating on {num_episodes} episodes...")
         
-        for episode_idx in tqdm(range(num_episodes), desc="Evaluation"):
-            episode_result = self._run_episode(
-                model, 
-                temperature=temperature,
-                max_new_tokens=max_new_tokens,
-                verbose=verbose
-            )
+        for city in random_cities:
+            episode_result, questions = self._run_episode(model, city)
+            results["correct"] += int(episode_result["correct"])
+            results["asked"] += episode_result["asked"]
+            results["trajectories"].append(questions)
             
-            results["episodes"].append(episode_result)
-            results["successes"] += int(episode_result["correct"])
-            results["total_questions"] += episode_result["questions_used"]
-            results["total_rewards"] += episode_result["total_reward"]
-            
-        
-        # Calculate aggregate metrics
         metrics = {
-            "success_rate": results["successes"] / num_episodes,
-            "avg_questions": results["total_questions"] / num_episodes,
-            "avg_reward": results["total_rewards"] / num_episodes,
-        }
-        
-        model.train()  
+            "accuracy": results["correct"] / num_episodes,
+            "avg": results["asked"] / num_episodes,
+            "trajectories": results["trajectories"]
+        } 
         return metrics
     
-    def _run_episode(
-        self, 
-        model, 
-        temperature: float,
-        max_new_tokens: int,
-        verbose: bool
-    ) -> Dict:
-        """Run a single evaluation episode."""
-        state = self.env.reset()
+    def _run_episode(self, model, city) -> Dict:
+
+        model.to(self.device)
         
         done = False
         total_reward = 0
         questions_asked = 0
-        
+
+        self.env.reset()
+        self.env.target_city = city
+
+        self.tokenizer.truncation_side = "left"
+        info = None
+
+        questions = []
+        done = False
+        print(city)
+        print('--------------------')
         while not done:
-            # Create prompt
-            prompt = self._create_prompt(state)
-            
-            # Tokenize with truncation
+            prompt = self.create_prompt(self.env)
             context_tensor = self.tokenizer.encode(
                 prompt,
                 return_tensors="pt",
                 truncation=True,
-                max_length=self.max_context_length - 30,
-                truncation_side="left"
-            ).squeeze().to(self.device)
-            
-            # Generate question
+                max_length=self.config.max_context_length - 30
+            ).squeeze(0).to(self.device)
+
             with torch.no_grad():
-                # Use the pretrained_model attribute to avoid value head during generation
-                question_tensor = model.pretrained_model.generate(
-                    context_tensor.unsqueeze(0),
-                    return_prompt=False,
-                    **self.generation_kwargs_question
-                )            
+                outputs = model.generate(
+                    input_ids=context_tensor.unsqueeze(0),
+                    **self.generation_kwargs
+                )
+                generated = outputs[:, context_tensor.size(0):] 
 
-            next_question = self.tokenizer.decode(
-                question_tensor,
-                skip_special_tokens=True
-            ).strip()
-   
-            next_question = (question.split("?")[0] + "?").strip()
-
-            # Take action
-            state, reward, done, info = self.env.step(question)            
-            total_reward += reward
-            questions_asked += 1
-        
-        # Compile episode result
-        episode_result = {
-            "correct": info.get("correct", False),
-            "questions_used": questions_asked,
-            "total_reward": total_reward,
-            "target_city": info.get("target_city", "unknown"),
-            "efficiency": info.get("efficiency", 0.0),
-            "timeout": info.get("timeout", False),
-        }
-        
-        return episode_result
+            next_question = self.tokenizer.decode(generated[0], skip_special_tokens=True).strip()
+            next_question = (next_question.split("?")[0] + "?").strip()
+            questions.append(next_question)
+            info = self.env.step(next_question)
+            done = info['done']
+            answer = info['answer']
+            print(next_question)
+            print(answer)
+        print('--------------------')
+        return info, questions
     
-    def _create_prompt(self, state: dict) -> str:
-        """Create prompt from state (same as training)."""
+    def create_prompt(self, env) -> str:
         prompt = ""
-        for entry in state["history"]:
-            if entry["type"] == "question":
-                prompt += f"Q: {entry['content']}\nA: {entry['answer']}\n"
-        
-        prompt += "Q: "
+        for step in env.history:
+            prompt += f"Q:{step['question']} A:{step['answer']}\n"
+        prompt += "Q:"
         return prompt
     

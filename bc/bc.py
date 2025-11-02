@@ -12,6 +12,7 @@ from peft import LoraConfig, get_peft_model
 #from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 import random
+from peft import PeftModel
 
 cities = [
     'Guayaquil, Ecuador', 'Taipei, China', 'Zibo, China', 'Jinan, China', 'Alexandria, Egypt',
@@ -294,8 +295,8 @@ def is_city_guess(question: str) -> bool:
 def generate_trajectories(model, tokenizer, num_runs):
     trained_model = model.eval()
     trained_tokenizer = tokenizer
-    oracle_model = AutoModelForCausalLM.from_pretrained("microsoft/Phi-3-mini-4k-instruct").eval()
-    oracle_tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
+    oracle_model = AutoModelForCausalLM.from_pretrained("microsoft/Phi-3-mini-4k-instruct", local_files_only=True).eval()
+    oracle_tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct", local_files_only=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     trained_model.to(device)
@@ -330,7 +331,7 @@ def generate_trajectories(model, tokenizer, num_runs):
                 input_ids = context['input_ids']
                 answer_ids = answer_ids[:, input_ids.shape[1]:]  
                 answer = oracle_tokenizer.decode(answer_ids[0], skip_special_tokens=True).strip()
-                stop_cues = ["Question", "Answer"]
+                stop_cues = ["\n", "Question", "Answer"]
                 # truncate at the first cue that appears
                 for cue in stop_cues:
                     stop_idx = answer.find(cue)
@@ -366,12 +367,12 @@ def run_evaluation(model, tokenizer, step):
     print(f"Std reward: {std_reward}")
     print(f"Accuracy: {accuracy}")
 
-    with open(f"bc/summary_bc_filtered2_{step}.out", "w") as f:
+    with open(f"bc/summary_bc_filtered_{step}.out", "w") as f:
         f.write(f"Average reward: {avg_reward}\n")
         f.write(f"Std reward: {std_reward}\n")
         f.write(f"Accuracy: {accuracy}\n")
 
-    with open(f"bc/trajectories_bc_filtered2_{step}.out", "w") as f:
+    with open(f"bc/trajectories_bc_filtered_{step}.out", "w") as f:
         json.dump(trajectories, f, indent=2)
     
 
@@ -478,10 +479,20 @@ def train_model2(conversations):
     
 if __name__ == "__main__":
 
+    """
     with open('train2.json', 'r') as f:
         conversations = json.load(f)
 
     train_model2(conversations)
+    """
+
+    base_model_path = "./gpt2-medium-offline"
+    sft_model_path = "bc/fine_tuned_gpt2_medium_lora_filtered"
+
+    base_model = AutoModelForCausalLM.from_pretrained(base_model_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(sft_model_path)
+    sft_model = PeftModel.from_pretrained(base_model, sft_model_path)
+    run_evaluation(sft_model, tokenizer, 8)
     
     """
     pairs = transform_dataset()
